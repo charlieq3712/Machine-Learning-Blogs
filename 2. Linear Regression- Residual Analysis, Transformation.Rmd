@@ -1,0 +1,307 @@
+---
+title: "Linear Regression: Residual Analysis, Transformation"
+author: 'Charlie Qu'
+date: "September 18, 2017"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning=FALSE,message = FALSE,cache = TRUE)
+library(car)
+# add other libraries here
+```
+
+This weekly summary involves the UN data set from ALR. Download the `alr3` library and load the data to answer the following questions adding your code in the code chunks.  Please add appropriate code to the chuncks to suppress messages and warnings as needed once you are sure the code is working properly and remove instructions if no longer needed.  Please switch the output to pdf for your final version to upload to Sakai.
+
+```{r data, echo=F}
+library(alr3)
+data(UN3)
+help(UN3)  # remove after reading
+```
+
+## Exploratory Data Analysis
+1. Create a summary of the data.  Check the missing, quantitative and qualtitative data.
+
+All of the variables are quantitative, as described below
+(1)ModernC: Percent of unmarried women using a modern method of contraception.
+(2)Change: Annual population growth rate, percent.
+(3)PPgdp:Per capita 2001 GDP, in US \$.
+(4)Frate:Percent of females over age 15 economically active.
+(5)Pop:Population, thousands.
+(6)Fertility:Expected number of live births per female, 2000.
+(7)Purban:Percent of population that is urban, 2001.
+
+All of the variables except "Purban" have missing data by simply viewing the UN3 dataset summary. Specifically, here is a brief summary
+
+```{r}
+summary(UN3)
+```
+Alternatively, let us look at the proportions of missing values for all the variables, respectively.
+
+```{r}
+library(knitr)
+missing.Mod=sum(is.na(UN3[,1]))/nrow(UN3)
+missing.Ch=sum(is.na(UN3[,2]))/nrow(UN3)
+missing.PP=sum(is.na(UN3[,3]))/nrow(UN3)
+missing.Fr=sum(is.na(UN3[,4]))/nrow(UN3)
+missing.Pop=sum(is.na(UN3[,5]))/nrow(UN3)
+missing.Fe=sum(is.na(UN3[,6]))/nrow(UN3)
+missing.Pur=sum(is.na(UN3[,7]))/nrow(UN3)
+##Find the absolute missing values of all the variables ##
+missing=rep(7)
+for (i in 1:7){missing[i]=sum(is.na(UN3[,i]))}
+##Find the missing proportions of all the variables ##
+missing.per=rep(7)
+for (i in 1:7){missing.per[i]=sum(is.na(UN3[,i]))/nrow(UN3)}
+percent <- function(x, digits = 2, format = "f", ...) {
+  paste0(formatC(100 * x, format = format, digits = digits, ...), "%")
+}
+## Gernerate a summary table for missing#
+Variables=c("ModernC", "Change","PPgdp","Frate","Pop","Fertility","Purban")
+missingsummary=data.frame(Variables,missing,percent(missing.per))
+kable(missingsummary)
+
+```
+
+2. Find the mean and standard deviation of each quantitative predictor.  
+
+The summary of means and standard deviations are as below
+```{r}
+library(knitr)
+colSD<- function(data) {sapply(data, sd, na.rm = TRUE)}
+means=colMeans(UN3[, 1:7],na.rm = TRUE)
+means=format(round(means, 2), nsmall = 2)
+sds=colSD(UN3[, 1:7])
+sds=format(round(sds, 2), nsmall = 2)
+UN3ms=data.frame(means,sds)
+kable(UN3ms)
+
+```
+
+
+3. Investigate the predictors graphically, using scatterplots or other tools of your choice. Create some plots highlighting the relationships among the predictors. Some findings reported regarding trying to predict `ModernC` from the other variables.  Check potential outliers, nonlinear relationships or transformations that appear to be needed.
+
+```{r}
+library(GGally)
+library(ggplot2)
+ggp=ggpairs(UN3, columns= 1:7)
+print(ggp + ggtitle("Scatterplot, correlation and histogram of UN3 quatitative predictors"))
+```
+
+(i)  By running the ggpairs() we find that:
+
+(1)  For the relaltionships
+(a)  Strong correlated: Fertility and ModernC (-0.773), Fertility and Change (0.814)
+(b)  Moderdately strong correlated:change and ModernC(-0.555),PPgdp and ModernC(0.552),Purban and ModernC(0.567),Fertility and PPgdp(-0.463),Purban and Fertility(0.581),Pop and Purban(0.58);
+(c)  Weakly correlated: Pop and ModernC(0.181), PPgdp and Change(-0.297),Frate and Change(-0.168); Frate and Purban(-0.186);
+(d)  Ignored relation: Pop and Change (0.0416), Frate and PPgdp(0.0863), Pop and PPgdp(-0.0373), Pop and Frate(0.0347), Fertility and Frate (-0.0596), Fertility and Pop (-0.0717), Purban and Pop (-0.0899).
+
+(2)  For the distributions: Pop, PPgdp and Fertility are generally right skewed, Change and Frate are nearly prefect bell-shaped, Purban and ModernC are generally symmetric but of no particular pattern. 
+  
+(ii)  For ModernC, we find that Fertility is strongly correlated with it. There are potentially some influecial points in the left-lower region in their scatterplot. While Change, PPgdp and Purban are moderately strongly correlated to it, with much wider range of points in the scatterplot. So we can predict ModernC by regressing on Fertility and its transformation mainly, and check if adding the other three variables with their transformation would improve the model fitting or not. Moreover, since Change and Fertility are strongly correlated, and the others are also pairwisely moderate strongly correlated, their multicollineariy should be considered. In this situation, linear regression is good enough, no need to consider non-linear case.
+
+## Model Fitting
+
+4.  Use the `lm()` function to perform a multiple linear regression with `ModernC` as the response and all other variables as the predictors, using the formula `ModernC ~ .`, where the `.` includes all remaining variables in the dataframe.  Create  diagnostic residual plot  from the linear model object and comment on results regarding assumptions.
+
+(i)  We run the regression of ModernC on all the other predictors first, check the summary blow
+```{r}
+summary(lm(ModernC ~ Change+PPgdp+Frate+Pop+Fertility+Purban, data=UN3))
+```
+(ii)  Then we create a set of diagnostic residual plots as below
+```{r}
+par(mfrow=c(2,2))
+plot(lm(ModernC ~ Change+PPgdp+Frate+Pop+Fertility+Purban, data=UN3,ask=F))
+```
+
+(1) There is no obvious curved pattern for the residual plot, indicating that the variance is contant.  
+
+(2) Normal Q-Q plots is slightly negative skewed since the tail of the group of points is obviously above off the straight line. 
+
+(3) Similarly as (1), the curved plot indicates the variance is nearly ideally contant. 
+
+(4) There are severl obvious outliers for this model, such as China, India and Kerwait. Besides,there are bunch of potentially infuencial points off the center of the points, which indicates the model may be fitted better with transformations. For example, if we take log on the predictors and regressor, the influecial points issue may be improved significantly. 
+
+
+5.  Using the Box-Tidwell  `boxTidwell` from library `car` or graphical methods find appropriate transformations of the predictor variables to be used as predictors in the linear model.  If any predictors are negative, you may need to transform so that they are non-negative.  Describe your method and  the resulting transformations.
+
+  Since by the summary we find that "Change" ranges from -1.10, we add 1.2 to it to make it non-negative. 
+(i)  Firstly, check the hypotheses that if it is necessary to conduct power transformations on X's.
+
+(a)  On "Change"
+```{r}
+library(car)
+UN3$Change=UN3$Change+1.20
+boxTidwell(ModernC~Change,data=UN3)
+```
+
+(b)  On "PPgdp"
+```{r}
+boxTidwell(ModernC~PPgdp,data=UN3)
+```
+
+(c)  On "Frate"
+```{r}
+boxTidwell(ModernC~Frate,data=UN3)
+```
+
+(d)  On "Pop"
+```{r}
+boxTidwell(ModernC~Pop,data=UN3)
+```
+(e)  On "Fertility"
+```{r}
+boxTidwell(ModernC~Fertility,data=UN3)
+```
+
+(f)  On "Purban"
+```{r}
+boxTidwell(ModernC~Purban,data=UN3)
+```
+Since the P-values for Change, PPgdp and Frate are less than 0.05, no BT transformations are needed. But those tests for Pop, Fertility and Purban indicate that we need to make BT transformation on them.
+
+(ii)  The final model with transformed X's is as below
+
+$$ModernC=\beta_0+\beta_c\times Change+\beta_{PP}\times PPgdg+\beta_Fr\times Frate+\beta_Pop\times Pop^{0.5910}+\beta_Fer\times Fertility^{1.141}+\beta_Pur\times Purban^{0.9796}$$
+
+6. Given the selected transformations of the predictors, select a transformation of the response and justify.
+
+By running boxCox(),
+```{r}
+Poptrans=UN3$Pop^0.5909587
+Fertilitytrans=UN3$Fertility^1.141199
+Purbantrans=UN3$Purban^0.979598
+translm=lm(ModernC ~ Change+PPgdp+Frate+Poptrans+Fertilitytrans+Purbantrans, data=UN3,ask=F)
+bc=boxCox(translm)
+
+```
+
+we find that the optimal $\lambda$ for BT transformation on y is about 0.8, where log-likelihood is maximized
+
+Let us check the regression summary
+```{r}
+Modernt=(UN3$ModernC^0.8-1)/0.8
+summary(lm(Modernt ~ Change+PPgdp+Frate+Poptrans+Fertilitytrans+Purbantrans, data=UN3))
+```
+
+7.  Fit the regression using the transformed variables.  Provide residual plots and comment.  Provide summaries of coefficients with 95% confidence intervals in a nice table with interpretations.
+
+(i)  The model is finally fitted as 
+$$ \frac{ModernC^{0.8}-1}{0.8} =\beta_0+\beta_c\times Change+\beta_{PP}\times PPgdg+\beta_Fr\times Frate+\beta_Pop\times Pop^{0.5910}+\beta_Fer\times Fertility^{1.141}+\beta_Pur\times Purban^{0.9796}$$
+
+(ii)  The residual plots are as below
+```{r}
+par(mfrow=c(2,2))
+lmt=lm(Modernt ~ Change+PPgdp+Frate+Poptrans+Fertilitytrans+Purbantrans, data=UN3)
+plot(lmt)
+```
+
+(iii)  The confidence intervals are
+```{r}
+Modernt=(UN3$ModernC^0.8-1)/0.8
+tval <- -qt((1-0.95)/2, df=nrow(UN3)-2)
+LB=rep(6)
+for (i in 1:6){LB[i]=summary(lmt)$coefficients[i,1]-summary(lmt)$coefficients[i,2]*tval}
+UB=rep(6)
+for (i in 1:6){UB[i]=summary(lmt)$coefficients[i,1]+summary(lmt)$coefficients[i,2]*tval}
+Vs=c("Change","PPgdp","Frate","Pop","Fertility","Purban")
+kable(data.frame(Vs,LB,UB))
+
+```
+
+8.  Examine added variable plots and term plots for you model above.  Is it likely that any of the localities are influential for any of the terms?  Which localities?  Which terms?
+
+```{r}
+av.plots(lmt)
+
+```
+  For Change, the points beyond 2.0 on x-axis seems to be influencial.
+  For PPgdp, the series of points beyong 10000 on x-axis seem to be influencial.
+  For Frate, the series of points beyong 30 and -40 on x-axis seem to be influencial.
+  For Poptrans, the series of points beyong 1000 on x-axis seem to be influencial.
+  For Fertility, the series of points beyong 2 and -2 on x-axis seem to be influencial.
+  For Purban, the series of points beyong -20 ahd 20 on x-axis seem to be influencial.
+  
+The term plots are as below
+```{r}
+par(mfrow = c(2,3)) 
+termplot(lmt)
+
+```
+9.  Are there any outliers in the data?  Explain.  If so refit the model after removing any outliers.
+
+By Bonferonni Correction & Multiple Testing, we have
+```{r}
+pval = 2*(1 - pt(abs(rstudent(lmt)), lmt$df -1))
+View
+rownames(UN3)[pval < .05/nrow(UN3)]
+```
+Thus, there are no outliers in this case.
+
+By checking the Cook's distances, we refit the residual plots, as below
+```{r}
+lmt2 = lm(Modernt ~ Change+PPgdp+Frate+Poptrans+Fertilitytrans+Purbantrans,
+          data=UN3,subset=!cooks.distance(lmt)>1)
+par(mfrow=c(2,2)); plot(lmt2)
+```
+## Summary of Results
+
+10. Provide a brief paragraph summarizing your final model  and findings suitable for the US envoy to the UN after adjusting for outlierd or influential points.
+
+(i)  The final model fitted is 
+$$ \frac{ModernC^{0.8}-1}{0.8} $$
+$$=\beta_0+\beta_c\times Change+\beta_{PP}\times PPgdg+\beta_Fr\times Frate+\beta_Pop\times Pop^{0.5910}+\beta_Fer\times Fertility^{1.141}+\beta_Pur\times Purban^{0.9796}$$
+(ii)  We select not to remove the outliers and stick to the original model.
+
+(iii) There is no obvious curved pattern for the residual plot, indicating that the variance is contant.  
+
+(iv) Normal Q-Q plots is slightly negative skewed since the tail of the group of points is obviously above off the straight line. 
+
+(v) The curved plot of standardized residual vs fitted values indicates the variance is nearly ideally contant. 
+
+(vi)63.75% of the variation in ModernC is explained by this model.
+
+## Theory
+
+11.  Using  $X^TX = X^T_{(i)}X_{(i)} + x_i x_i^T$ where the subscript $(i)$ means without the ith case, show that 
+
+$$
+( X^T_{(i)}X_{(i)})^{-1} = (X^TX)^{-1} + \frac{(X^TX)^{-1}x_ix_i^T  (X^TX)^{-1}}{1 - h_{ii}}
+$$
+
+where $h_{ii}$ is the $i$th diagonal element of $H = X(X^TX)^{-1}X^T$.
+
+$Proof$
+$$X^TX = X^T_{(i)}X_{(i)} + x_i x_i^T\Rightarrow$$
+$$(X^T_{(i)}X_{(i)})^{-1}=(X^TX-x_i x_i^T)^{-1}\Rightarrow$$
+$$(X^T_{(i)}X_{(i)})^{-1}=(X^TX-\frac{(X^TX)x_i x_i^T(X^TX)}{(X^TX)^{2}})^{-1}\Rightarrow$$
+$$(X^T_{(i)}X_{(i)})^{-1}=(X^TX-\frac{(X^TX)x_i x_i^T(X^TX)}{(X^TX)^{2}})^{-1}\Rightarrow$$
+Thus,
+
+$$(X^T_{(i)}X_{(i)})^{-1}=(X^TX)^{-1}+\frac{(X^TX)^{-1}x_ix_i^T  (X^TX)^{-1}}{1 - h_{ii}}$$
+
+
+12. Use 11 to show that
+
+$$\hat{\beta}_{(i)} = \hat{\beta} -  \frac{(X^TX)^{-1}x_i e_i}{1 - h_{ii}}$$
+where $\hat{\beta}_{(i)} = ( X^T_{(i)}X_{(i)})^{-1} X_{(i)}^T Y_{(i)}$ and $e_i = y_i - x_i^T\hat{\beta}$.  _Hint write_  $X_{(i)}^T Y_{(i)} = X^TY - x_{i}y_{i}$.
+
+$proof$
+Since $X_{(i)}^T Y_{(i)} = X^TY - x_{i}y_{i} $ by 11.
+$$\hat{\beta}_{(i)} = ( X^T_{(i)}X_{(i)})^{-1} X_{(i)}^T Y_{(i)}$$
+$$=( X^T_{(i)}X_{(i)})^{-1} (X^TY - x_{i}y_{i})$$
+$$=((X^TX)^{-1} + \frac{(X^TX)^{-1}x_ix_i^T  (X^TX)^{-1}}{1 - h_{ii}}) (X^TY - x_{i}y_{i})$$
+$$=(X^TX)^{-1}X^TY-(X^TX)^{-1}x_{i}y_{i}+\frac{(X^TX)^{-1}x_ix_i^T  (X^TX)^{-1}}{1 - h_{ii}}X^TY-\frac{(X^TX)^{-1}x_ix_i^T  (X^TX)^{-1}}{1 - h_{ii}} x_{i}y_{i}$$
+$$=\hat{\beta}-\frac{(1 - h_{ii})(X^TX)^{-1}x_{i}y_{i}}{1 - h_{ii}}+\frac{(X^TX)^{-1}x_ix_i^T  \hat{\beta}}{1 - h_{ii}}-\frac{(X^TX)^{-1}x_ix_i^T  (X^TX)^{-1}}{1 - h_{ii}} x_{i}y_{i}$$
+$$=\hat{\beta}-\frac{(X^TX)^{-1}[x_{i}y_{i}(1 - h_{ii})-x_ix_i^T  \hat{\hat{\beta}+x_ix_i^T  (X^TX)^{-1}x_{i}y_{i}}}{1 - h_{ii}}$$
+$$=\hat{\beta}-\frac{(X^TX)^{-1}[x_{i}y_{i}-x_ix_i^T  \hat{\hat{\beta}+x_ix_i^T  (X^TX)^{-1}x_{i}y_{i}}-h_{ii}x_{i}y_{i}]}{1 - h_{ii}}$$
+Since $h_{ii}=x_ix_i^T  (X^TX)^{-1}$ by definition, the above reduces to
+$$=\hat{\beta}-\frac{(X^TX)^{-1}[x_{i}y_{i}-x_ix_i^T  \hat{\hat{\beta}}]}{1 - h_{ii}}$$
+$$e_i = y_i - x_i^T\hat{\beta}\Rightarrow$$
+$$x_ie_i = x_iy_i - x_ix_i^T\hat{\beta}\Rightarrow$$
+Thus,
+$$=\hat{\beta}-\frac{(X^TX)^{-1}x_ie_i}{1 - h_{ii}}$$
+
