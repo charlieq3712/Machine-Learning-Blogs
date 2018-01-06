@@ -1,0 +1,582 @@
+---
+title: "Logistics Regression"
+date: "September 27, 2017"
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document: default
+---
+
+```{r setup, include=FALSE, message = FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+library(arm)
+library(foreign)
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(gridExtra)
+# add other libraries
+```
+
+
+This writing explores logistic regression with the National Election Study data from Gelman & Hill (GH).  (See Chapter 4.7 for descriptions of some of the variables and 5.1 of GH for initial model fitting). 
+
+[*The following code will read in the data and perform some filtering/recoding. Remove this text and modify the  code chunk options so that the code does not appear in the output.*]
+
+```{r, include = FALSE}
+# Data are at http://www.stat.columbia.edu/~gelman/arm/examples/nes
+
+nes <- read.dta("nes5200_processed_voters_realideo.dta",
+                   convert.factors=F)
+# Data cleaning
+# remove NA's for key variables first
+nes1992 = nes %>% filter(!is.na(black)) %>%
+              filter(!is.na(female)) %>%
+              filter(!is.na(educ1)) %>%
+              filter(!is.na(age)) %>%
+              filter(!is.na(state)) %>%
+              filter(!is.na(income)) %>%
+              filter(presvote %in% 1:2) %>% 
+# limit to year 1992 to 2000 and add new varialbes
+              filter(year == 1992) %>%
+              mutate(female = gender -1,
+                     black=race ==2,
+# recode vote so that vote = 1 corresponds to a vote for Bush, and vote=0 is a vote for Clinton, where votes for Ross Perot were removed earlier                     
+                     vote = presvote == 2)
+```
+
+1. Summarize the data for 1992 noting which variables have missing data.  Which variables are categorical but are coded as numerically? 
+
+```{r, include = FALSE}
+#summary(nes1992)
+sapply(nes1992, function(x) sum(is.na(x)))
+str(nes1992)
+```
+
+```{r}
+##pick coloumns with NA
+df_1=as.data.frame.matrix(summary(nes1992))
+condition_1 <- !is.na(unlist(df_1[7,]))
+df_with_missing_data=df_1[,condition_1]
+print(colnames(df_with_missing_data))
+```
+
+29 variables have missing data, `including occup1`, `union`, `religion`, `martial_status`, `occup2`, `icpsr_cty`, `partyid7`, `partyid3`, `partyid3_b`, `str_partyid`, `father_party`, `mother_party`, `dem_therm`, `rep_therm`, `regis`, `presvote_intent`, `ideo_feel`, `ideo7`, `ideo`, `cd`, `rep_pres_intent`, `real_ideo`, `presapprov`, `perfin1`, `perfin2`, `perfin3`, `newfathe`, `newmoth`, `parent_party`.
+   
+variable `gender`, `race`, `educ1`, `urban`, `region`, `income`, `occup1`, `union`, `religion`, `educ2`, `educ3`, `martial_status`, `occup2`, `partyid7`, `partyid3`, `partyid3_b`, `str_partyid`, `father_party`, `mother_party`, `dlikes`, `rlikes`, `presvote`, `presvote_2party`, `presvote_intent`, `ideo7`, `ideo`, `cd`, `state`, `inter_pre`, `inter_post`, `female`, `rep_presvote`, `rep_pres_intent`, `south`, `real_ideo`, `presapprov`, `perfin1`, `perfin2`, `presadm`, `newfathe`, `newmoth`, `parent_party`, `white` are categorical but are coded as numerically.
+
+2. Fit the logistic regression to estimate the probability that an individual would vote Bush (Republican) as a function of income and provide a summary of the model.
+
+```{r}
+# income is continuous number
+vote = factor(nes1992$vote)
+glm.fit=glm(vote ~ income, data = nes1992, family = binomial(link = "logit"))
+summary(glm.fit)
+```
+
+The coefficient of Intercept is -1.4, and the coefficient of income is 0.32599, which means an unit change in income will result in 0.32599 increasing in $logP(vote)$. Both of these coeffcients are statistically significant, and the residual deviance of the model is 1556.9. 
+
+```{r}
+#income as factor
+glm.fit1=glm(vote ~ factor(income), data = nes1992, family = binomial(link = "logit"))
+summary(glm.fit1)
+```
+
+
+3. Obtain a point estimate and create a 95% confidence interval for the odds ratio for voting Republican for a rich person (income category 5) compared to a poor person (income category 1). *Hint this is more than a one unit change; calculate manually and then show how to modify the output from confint*. Provide a sentence interpreting the result.
+
+```{r, message = FALSE}
+odds_ratio = exp(4*glm.fit$coefficients[2])
+ciodds_ratio = exp(4*confint(glm.fit)[2,])
+odds_ratio
+ciodds_ratio
+```
+The point estimator for odds ratio is `odds_ratio`, and the CI for it is `ciodds_ratio`.  
+
+```{r}
+#income as continuous
+beta1 = summary(glm.fit)[["coefficients"]][,1][2]
+beta1_se = summary(glm.fit)[["coefficients"]][,2][2]
+critval = qnorm(0.975)
+#point estimate
+point_estimate = exp(4*beta1)
+odds_ratio_CI = matrix(c(exp(4*(beta1 - critval * beta1_se)), 
+                  exp(4*(beta1 + critval * beta1_se))), nrow = 1)
+dimnames(odds_ratio_CI)=list(c("Confidence Interval(hand)"),
+                            c("2.5%", "97.5%"))
+odds_ratio_CI_confint = suppressMessages(t(as.matrix(exp(4*confint(glm.fit)[2,]))))
+dimnames(odds_ratio_CI_confint)=list(c("Confidence Interval(confint)"),c("2.5%", "97.5%"))
+odds_ratio = rbind(odds_ratio_CI, odds_ratio_CI_confint)
+odds_ratio
+```
+
+
+4.  Obtain fitted probabilities and 95% confidence intervals for the income categories using the `predict` function.  Use `ggplot` to recreate the plots in figure 5.1 of Gelman & Hill.  *write a general function?*
+
+```{r}
+fitted_CI = as.data.frame(matrix(NA, nrow = 5, ncol = 3))
+colnames(fitted_CI) = c("fitted probability", "0.025 lower bound", "0.975 upper bound")
+for(i in 1:5){
+  predict = predict(glm.fit, data.frame(income= i), type="response", se.fit=TRUE)
+  fitted_CI[i,1] = predict$fit
+  se.fit = predict$se.fit
+  fitted_CI[i,2] = fitted_CI[i,1] - qnorm(0.975)*se.fit
+  fitted_CI[i,3] = fitted_CI[i,1] + qnorm(0.975)*se.fit
+}
+fitted_CI = cbind(c(1:5),fitted_CI)
+names(fitted_CI)[1] = 'income'
+kable(fitted_CI)
+```
+
+```{r}
+
+plot1 = ggplot(nes1992, aes(x = income, y = as.numeric(vote)))+ 
+  geom_jitter(width = 0.12, height = 0.05, size = 0.05) + 
+  xlim(0,6) +
+  stat_smooth(method = "glm", method.args = list(family = "binomial"),
+              se = FALSE, size = 2, col = "black") +
+  stat_smooth(method = "glm", method.args = list(family = "binomial"),
+              se = FALSE, size = 0.5, fullrange = TRUE, col = "black") +
+  theme_bw() +
+  theme(plot.background = element_blank()
+   ,panel.grid.major = element_blank()
+   ,panel.grid.minor = element_blank())
+
+plot2 = ggplot(nes1992, aes(x = income, y = as.numeric(vote)))+ 
+    geom_jitter(width = 0.12, height = 0.05, size = 0.05) + 
+    xlim(0,5.5) +
+    stat_smooth(aes(y = as.numeric(vote)), method="glm", method.args =list(family="binomial"), 
+                se=TRUE, col = "black") +
+    theme_bw() +
+    theme(
+      plot.background = element_blank()
+     ,panel.grid.major = element_blank()
+     ,panel.grid.minor = element_blank()
+    )
+
+grid.arrange(plot1,plot2,ncol = 2)
+
+```
+
+5.  What does the residual deviance or any diagnostic plots suggest about the model?  (provide code for p-values and output and plots) 
+    
+```{r}
+pchisq(glm.fit$deviance, glm.fit$df.residual, lower = FALSE)
+par(mfrow=c(2,2))
+plot(glm.fit)
+```
+
+Since the p-value of the residual deviance test is very small, we use `pchisq` to obtain the p-value and conclude that deviance is much larger than expected, which indicates the model is lack of fit. In addition, we plot diagonostic plots. However, these plots are hard to explained in the case of binary regression. Deviance analysis is a better diagnostic tool. 
+
+6. Create a new data set by the filtering and mutate steps above, but now include years between 1952 and 2000.
+
+```{r}
+nes<-read.dta("nes5200_processed_voters_realideo.dta", convert.factors=F)
+nesnew=nes %>% 
+            filter(year>=1952 & year<=2000) %>%
+            filter(!is.na(black)) %>%
+            filter(!is.na(female)) %>%
+            filter(!is.na(educ1))  %>%
+            filter(!is.na(age)) %>%
+            filter(!is.na(state)) %>%
+            filter(!is.na(income)) %>%
+            filter(presvote %in% 1:2) %>%
+            mutate(female = gender - 1,
+                   black =race==2,
+                   vote=presvote==2)
+```
+
+7. Fit a separate logistic regression for each year from 1952 to 2000, using the `subset` option in `glm`,  i.e. add `subset=year==1952`. For each find the 95% Confidence interval for the odds ratio of voting republican for rich compared to poor for each year in the data set from 1952 to 2000.
+
+```{r}
+# year 
+Year = unique(nesnew$year)
+# empty dataframe
+res = as.data.frame(matrix(NA, nrow = length(Year), ncol = 6))
+colnames(res) = c("year", "coefficient", "1sd lower bound", "1sd upper bound", "Lower 95% CI of odds ratio", "Upper 95% CI of odds ratio")
+
+res$year = paste(Year)
+for (i in 1:length(Year)){
+  glm.fit=glm(as.factor(vote) ~ income, data = nesnew, family = binomial, subset=year==Year[i])
+  summary = summary(glm.fit)
+  ci_beta = confint(glm.fit)[2,]
+  se = summary$s
+  res[i, 2] = glm.fit$coefficients[2]
+  se = summary$coefficients[2,2]
+  res[i, 3] = res[i, 2] - 1 * se
+  res[i, 4] = res[i, 2] + 1 * se
+  odd_ratio = exp(4*ci_beta)
+  res[i, 5] = odd_ratio[1]
+  res[i, 6] = odd_ratio[2]
+}
+res
+qplot(res[,1],res[,2],geom = c("line","point"), group = 1,xlab = "Year", ylab = "Coefficient")
+```
+From the figure above, we could found that the coefficient over year has an increasing trend. 
+
+8.  Using `ggplot` plot the confidence intervals over time similar to the display in Figure 5.4.
+
+```{r}
+  ##v_8 <- subset(df_8, select = c(""))
+
+  ggplot(res, aes(x = year, y = 0.5*(`Lower 95% CI of odds ratio`+`Upper 95% CI of odds ratio`))) +
+  geom_point() + 
+  geom_errorbar(aes(ymax = `Lower 95% CI of odds ratio`, ymin=`Upper 95% CI of odds ratio`)) +
+  theme_bw() +
+  theme(
+    plot.background = element_blank()
+   ,panel.grid.major = element_blank()
+   ,panel.grid.minor = element_blank()
+  )
+```
+
+The pattarn of richer voter supporting republicanshas increased since 1970. This plot shows the coefficients of income(1-5 scale) with $\pm{1}$ standard error bounds in logistic regression predicting Replublican preference for president.
+
+
+
+
+9. Fit a logistic regression using income and year as a factor  with an interaction i.e. `income*factor(year)` to the data from 1952-2000.  Find the log odds ratio for income for each year by combining parameter estimates and show that these are the same as in the respective individual logistic regression models fit separately to the data for each year.
+
+
+```{r, message = FALSE}
+
+# fit model with interaction
+glm.fit_IcYr = glm(vote ~ income * factor(year), data = nesnew, family = binomial)
+summary(glm.fit_IcYr)
+
+# extract log odds ratio for each year by combining parameters
+a = coef(glm.fit_IcYr)
+Sum_IcYr = rep(0,length(Year))
+for(i in 1:length(Year)){
+  if(i == 1){
+    Sum_IcYr[i] = sum(a[c(1,2)])
+  }else{
+    Sum_IcYr[i] = sum(a[c(1,2,(i+1),(i+13))])
+  }
+}
+
+# fit separately for each year
+Sum_eachYear = rep(0,length(Year))
+confInt = data.frame(matrix(c(0,0),ncol = 2))
+coef = rep(0,length(Year))
+for(i in 1:length(Year)){
+  y = Year[i]
+  glm.fit_sep = glm(vote ~ income, data = nesnew, subset = year == y, family = binomial)
+  Sum_eachYear[i] = sum(coef(glm.fit_sep))
+  coef[i] = coefficients(glm.fit_sep)[2]
+  confInt[i,] = confint(glm.fit_sep)[2,]
+}
+
+confInt = cbind(Year,coef,confInt)
+names(confInt) = c("Year","coefficient","lower","upper")
+# bind dataframe
+Compare = data.frame(rbind(Sum_IcYr,Sum_eachYear))
+names(Compare) = Year
+rownames(Compare) = c("With Interaction term","Fit by each_Year")
+Compare = t(Compare)
+kable(Compare)
+
+```
+
+In order to generate the comparison table, we fit the interaction model `glm.fit_IcYr`, and `glm.fit_sep` respectively. In the `glm.fit_sep` model, we fit with the model respect to each year individually in order to obtain the `year + income` coefficient parameters.In the `glm.fit_IcYr`, we obtain each year's coefficient parameters by adding coefficient values of `year` and interaction term `year:income` together. The results is recorded in the `Compare` table. This shows that log odds ratio for income for each year by combining parameter estimates and is as same as in the respective individual logistic regression models fit separately to the data for each year.
+
+
+
+10.  Create a plot of fitted probabilities and confidence intervals as in question 4, with curves for all years in the same plot. 
+
+```{r, message = FALSE, warning=FALSE}
+nesall = nes %>% filter(!is.na(black)) %>%
+              filter(!is.na(female)) %>%
+              filter(!is.na(educ1)) %>%
+              filter(!is.na(age)) %>%
+              filter(!is.na(state)) %>%
+              filter(!is.na(income)) %>%
+              filter(presvote %in% 1:2) %>% 
+# limit to year 19922 t0 2000 and add new varialbes
+              mutate(female = gender -1,
+                     black=race ==2,
+# recode vote so that vote = 1 corresponds to a vote for Bush, and vote=0 is a vote for Clinton, where votes for Ross Perot were removed earlier                     
+                     vote = presvote == 2)
+```
+
+```{r, message = FALSE, warning=FALSE}
+#Use ggplot to plot probability and confidence interval for "nesall"
+nesall$year = as.factor(nesall$year)
+ggplot(nesall, aes(x = income, y = as.numeric(vote), group = year,color =year))+ 
+  geom_jitter(width = 0.1, height = 0.03,color = 'black', size = 0.01) + 
+  geom_point(color = 'black') + 
+  xlim(0,8) +
+  stat_smooth(method = "glm",method.args =list("binomial"), se = FALSE, size = 1) +
+  stat_smooth(method = "glm",method.args =list("binomial"), 
+              se = FALSE, size = 0.5, fullrange = TRUE) +
+  theme_bw() +
+  theme(
+    plot.background = element_blank()
+   ,panel.grid.major = element_blank()
+   ,panel.grid.minor = element_blank()
+  ) 
+
+
+```
+
+```{r, message = FALSE, warning=FALSE}
+ggplot(nesall, aes(x = income, y = as.numeric(vote), group = year,color = year))+ 
+  geom_jitter(width = 0.1, height = 0.03,color = 'black', size = 0.01) + 
+  geom_point(color = 'black') + 
+  xlim(0,5.5) +
+  stat_smooth(method = "glm",method.args =list("binomial"), se = TRUE, size = 1) +
+  theme_bw() +
+  theme(
+    plot.background = element_blank()
+   ,panel.grid.major = element_blank()
+   ,panel.grid.minor = element_blank()
+  ) 
+```
+
+
+11.  Return to the 1992 year data. Filter out rows of `nes1992` with NA's in the variables below and  recode as factors using the levels in parentheses:
+    + gender (1 = "male", 2 = "female"), 
+    + race (1 = "white", 2 = "black", 3 = "asian", 4 = "native american", 5 = "hispanic", 7 = "other"), 
+    + education ( use `educ1` with levels 1 = "no high school", 2 = "high school graduate", 3 = "some college", 4 = "college graduate"), 
+    + party identification (`partyid3` with levels 1= "democrats", 2 = "independents", 3 = "republicans", 4 = "apolitical" , and 
+    + political ideology (`ideo` 1 = "liberal", 2 ="moderate", 3 = "conservative") 
+    
+    
+```{r, message = FALSE, warning=FALSE}
+
+nes1992 = nes1992 %>% filter(!is.na(gender)) %>%
+              filter(!is.na(race))  %>%
+              filter(!is.na(educ1)) %>%
+              filter(!is.na(partyid3)) %>%
+              filter(!is.na(ideo))  %>%
+              mutate(gender=recode_factor(gender,'1'="male",'2'="female"),
+                     race=recode_factor(race,"1"="white","2"="black",
+                                        "3"="asian","4"="native american",
+                                        "5"="hispanic","7"="other"),
+                     educ1=recode_factor(educ1,"1"="no high school",
+                                         "2"="high school graduate",
+                                         "3"="some college",
+                                         "4"= "college graduate"),
+                     partyid3=recode_factor(partyid3,"1"="democrats",
+                                            "2"="independents",
+                                            "3"="republicans",
+                                            "9"="apolitical"),
+                     ideo=recode_factor(ideo,"1"="liberal",
+                                        "3"="moderate",
+                                        "5"="conservative")
+                     ) 
+
+```
+
+
+12. Fit a logistic regression model predicting support for Bush given the the variables above and income as predictors and also consider interactions among the predictors. You do not need to consider all possible interactions or use model selection, but suggest a couple from the predictors above that might make sense intuitively.
+```{r,  message = FALSE, warning=FALSE}
+nes1992$race = factor(nes1992$race)
+nes1992$gender = factor(nes1992$gender)
+nes1992$educ1 = factor(nes1992$educ1)
+nes1992$partyid3 = factor(nes1992$partyid3)
+nes1992$ideo = factor(nes1992$ideo)
+glm.full = glm(vote ~ (income + gender + race + educ1 + partyid3 + ideo)^2, data = nes1992, family = "binomial")
+backwards = step(glm.full,trace=0) 
+summary(backwards)
+```
+
+
+We use backward selection to select the variables, and the preserved variables are `income`, `gender`, `race`, `partyid3`, `ideo`, `income:partyid3`, `gender:race`, `gender:partyid3`. Initially, We construct the full model by assuming each of the main effects (`income`, `gender`, `race`, `partyid3`, `educ1`, `ideo`) have interactions with one another. 
+
+
+13.  Plot binned residuals using the function `binnedplot` from package `arm` versus some of the additional predictors in the 1992 dataframe.  Are there any suggestions that the mean or distribution of residuals is different across the levels of the other predictors and that they should be added to the model?  (Provide plots and any other summaries to explain).   
+
+```{r, message = FALSE, warning=FALSE}
+x = predict(backwards)
+y = resid(backwards)
+
+## fit dlikes 
+fit_dlikes = glm(vote ~ dlikes, data = nes1992, family = binomial(link = "logit"))
+x = predict(fit_dlikes)
+y = resid(backwards) 
+binnedplot(x,y, main = "dlikes")
+
+## fit rlikes
+fit_rlikes = glm(vote ~ rlikes, data = nes1992, family = binomial(link = "logit"))
+x = predict(fit_rlikes)
+y = resid(backwards) 
+binnedplot(x,y, main = "rlikes")
+
+cor(nes1992$dlikes,nes1992$rlikes)
+
+# compare 
+fitt = step(glm(vote ~ (income + gender + race + partyid3 + ideo)^2 + dlikes, family = binomial(link = "logit"),data = nes1992), trace = 0)
+x = predict(fitt)
+y = resid(fitt) 
+binnedplot(x,y, main = "backward + dlikes")
+
+
+```
+
+If there are more points fall inside the boundary, the model could be considered as a better model. By comparing the model fitted by `rlikes`, `dlikes` and backward selected model, we consider fitting `rlikes` and `dlikes`. In addition, due to the strong correlation between these two variables, we only keep one and added in the backward selected models. The binned plot shows that the model become better. 
+
+
+
+14.  Evaluate and compare the different models you fit. Consider coefficient estimates (are they stable across models) and standard errors (any indications of identifiability problems), residual plots and deviances.
+
+```{r, message = FALSE, warning=FALSE}
+
+a = names(coefficients(fitt))
+b = names(coefficients(backwards))
+
+
+model2 = cbind(coefficients(fitt), confint(fitt))
+model2 = cbind(model2, model = "model2")
+model1 = cbind(coefficients(backwards), confint(backwards))
+model1 = cbind(model1, model = "model1")
+
+
+features = rownames(model1)
+model1 = cbind(model1, features)
+
+features = rownames(model2)
+model2 = cbind(model2, features)
+
+miss = matrix(NA,ncol = 5, nrow = 2 )
+miss[,5] = c(a[a %in% b == FALSE])
+
+df = data.frame(rbind(model1,model2,miss))
+df$V1 = as.numeric(as.character(df$V1))
+df$X2.5 = as.numeric(as.character(df$X2.5))
+df$X97.5 = as.numeric(as.character(df$X97.5))
+
+df = na.omit(df)
+
+ggplot(data = df, aes(x = model, y = V1 , group = features )) +
+  geom_point() + 
+  geom_errorbar(aes(ymax = `X97.5`, ymin=`X2.5`)) +
+  facet_wrap(~features,scales = "free")
+  
+confint(fitt, method="boot")
+anova(backwards,fitt, test = 'Chi')
+
+```
+
+From the previous question, we added 'dlikes' to the model. To check whether any coefficients become more unstable after we change the model, we plotted coefficients in both models with their intervals.
+From the figure above, we found that most of confidence interval of the coefficients become slightly larger. In addition, the coeffcient of variable `genderfemale`, `genderfemale:racenativeamerican` and `income:partyid3independent` change the sign. These variables can be considered unstable while we change the model.
+
+Further, in order to observe the identifiability problems, we construct the $ 95\% $ confidence interval and find that `partyid3apolitical` and `genderfemale:raceasian` has extremely large interval, which might be a indicator of identifiability problems. The reason might be the lack of the observations: only 1 for `partyid3(apolitical)` and 5 for `gender(female):race(asian)`.  
+
+In addition, we use anova test to test the deviance between these two models. The deviance was reduced by 214.88 which is much larger than 1. The goodness of fit test with this deviance indicates that there is no lack of fit issue in our model as well. 
+
+
+
+15.  Compute the error rate of your model (see GH page 99) and compare it to the error rate of the null model.  We can define a function for the error rate as:
+
+```{r error.rate, include=FALSE, message = FALSE, warning=FALSE}
+error.rate = function(pred, true) {
+  mean((pred > .5 & true == 0) | (pred < .5 & true == 1))
+}
+null.model = glm(vote ~ 1, data = nes1992, family = "binomial")
+full_hat = fitted(fitt)
+null_hat = fitted(null.model)
+full_error = error.rate(full_hat, nes1992$vote)
+null_error = error.rate(null_hat, nes1992$vote)
+```
+
+
+The error rate in our model is weigh better than the rate in the null model. In our model, the error rate is `r full_error` while in null model the rate is `r null_error`. 
+
+16.  For your chosen model, discuss and compare the importance of each input variable in the prediction. Provide a neatly formatted table of odds ratios and 95% confidence intervals.
+
+```{r, message = FALSE, warning=FALSE}
+summary(fitt)
+ratio_table = as.data.frame(round(exp(confint(fitt)),4))
+coef_ratio = as.data.frame(fitt$coefficients)
+table = cbind(coef_ratio, ratio_table)
+kable(table)
+```
+
+
+
+According to the summary of model `fitt`, variables `partyid3republicans` and `ideoconservative` are significant compared with their base level. The main variable `dlikes`, and interaction terms `income:partyid3republicans`, and `genderfemale:partyid3republicans` are also statistically significant. 
+
+17.  Provide a paragraph summarizing your findings and interpreting key coefficients (providing ranges of supporting values from above) in terms of the odds of voting for Bush.  Attempt to write this at a level that readers of the New York Times Upshot column could understand.   
+
+```{r, message = FALSE, warning=FALSE}
+ggplot(data = nes1992, aes(x = race , y = vote)) +
+  geom_jitter(size = 0.1, height = 0.2, width = 0.2)
+```
+
+
+Based on `table` from previous question and above figure, when other variables is constant and the baseline of varaible race is the white population. The log odds difference of voting Bush between black and white populations is -1.06. The log odds difference of voting Bush of between aisna and white populations is -0.06. The log odds difference of voting Bush between native american and white populations is 1.41. The log odds difference of voting Bush between hispanic and white populations is -1.19.
+
+
+18.  In the above analysis, we removed missing data.  Repeat the data cleaning steps, but remove only the rows where the response variable, `presvote` is missing.  Recode all of the predictors (including income) so that there is a level that is 'missing' for any NA's for each variable.  How many observations are there now compared to the complete data?
+
+```{r, message = FALSE, warning=FALSE}
+nes<-read.dta("nes5200_processed_voters_realideo.dta", convert.factors=F)
+
+## chang NA as missing instead of getting rid of it           
+nes$black[which(is.na(nes$black))] = "Missing"
+nes$female[which(is.na(nes$female))] = "Missing"
+nes$educ1[which(is.na(nes$educ1))] = "Missing"
+nes$age[which(is.na(nes$age))] = "Missing"
+nes$state[which(is.na(nes$state))] = "Missing"
+nes$income[which(is.na(nes$income))] = "Missing"
+
+nesmiss=nes %>% 
+            filter(!is.na(presvote)) %>%
+            filter(year == 1992) %>%
+            filter(presvote %in% 1:2) %>%
+            mutate(female = gender - 1,
+                   black =race==2,
+                   vote=presvote==2) 
+
+n_new = nrow(nesmiss)
+n_old = nrow(nes1992)
+```
+
+By label missing values, we now have `n_new` observations and in previous data set we only have `n_old` obervations. 
+
+
+19. For any of above variables, suggest possible reasons why they may be missing.
+
+
+Possible reasons for the missing variables include: people in the survey provide no response. For example income in this database, it's a variable that is kind of private, so people may be not willing to share this information, gender and age are also this kind of information sometimes. Another reason why participates tend to provide no reply is that the measurement of certain variables is repeated after a certain period of time. For example the education in this database, people in the survey may drop out before the test ends and one or more measurements are missing. Missing variables also have relevance with research fields, some fields like politics and sociology, issues in these fields are critical and sensitive, this makes governments choose or totally fail to report relevant information. Sometimes researchers will make some mistakes in data collection as well as data entry, which leads to missing variables.
+
+
+20.  Rerun your selected model and create a table of parameter estimates and confidence intervals for the odds ratios.  You should have an additional coefficient for any categorical variable with missing data. Comment on any changes in results for the model including the missing data and the previous one that used only complete data.
+
+
+```{r, message = FALSE, warning=FALSE}
+nesmiss$income = as.factor(nesmiss$income)
+nesmiss$race = factor(nesmiss$race)
+nesmiss$gender = factor(nesmiss$gender)
+nesmiss$educ1 = factor(nesmiss$educ1)
+nesmiss$partyid3 = factor(nesmiss$partyid3)
+nesmiss$ideo = factor(nesmiss$ideo)
+summary(fitt)
+fitt.miss = glm(formula = vote ~ income + gender + race + partyid3 + ideo + 
+    dlikes + income:gender + income:partyid3 + gender:race + 
+    gender:partyid3, family = binomial(link = "logit"), data = nesmiss)
+summary(fitt.miss)
+
+
+ratio_table = as.data.frame(round(exp(confint(fitt)),4))
+coef_ratio = as.data.frame(fitt$coefficients)
+table = cbind(coef_ratio, ratio_table)
+
+ratio_misstable = as.data.frame(round(exp(confint(fitt.miss)),4))
+coef_missratio = as.data.frame(exp(fitt.miss$coefficients))
+table_miss = cbind(coef_missratio, ratio_misstable)
+kable(table_miss)
+```
+
+
+Instead of deleting variables with NA, but recoding them by introducing a new label "missing", we generate a new data frame called `nesmiss`. In this data frame, the variable is factorized with a new level "missing". In order to compaare how the model is changed based on the modifying of the dataset, we fit a new model `fitt.miss` with the variables we selected in our previous final model(`fitt`). The summary results of our `fitt.miss` model shows that the main effects of `income` and `race`, and the interaction terms of income and party, income and gender, gender and race are no longer significant. 
+
+
+
+
+
+
+
+
