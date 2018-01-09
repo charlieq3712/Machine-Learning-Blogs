@@ -1,0 +1,430 @@
+---
+pdf_document: default
+author: "Charlie Qu"
+date: "Nov 14, 2017"
+output:
+  html_document: default
+  html_notebook: default
+  pdf_document: default
+  word_document: default
+title: "Model Selection, Regularization, Resampling"
+html_notebook: default
+---
+```{r}
+library(knitr)
+library(R2jags)
+```
+1.For $p=2$ create a plot showing the contours of the log likelihood surface  and contours of the log density of $\beta_1$ and $\beta_2$ for the case of independent Cauchy priors   (Student t densities with 1 degree of freedom).  For the same likelihood, make a plots for  the Lasso or Ridge priors.   
+
+2.  Refer to the College data that we used previously.  Modify the seed.
+```{r}
+library(ISLR)
+data(College)
+set.seed(0)
+```
+    a. split the data into a 75% training set and a 25% test set.
+```{r}
+library(ISLR)
+
+College_log = College
+College_log[,5:16] = log(College_log[,5:16])
+if (length(which(College_log$perc.alumni==-Inf)) > 0) {
+  College_log = College_log[-which(College_log$perc.alumni==-Inf),] 
+}
+
+## sampling training 
+set.seed(10)
+n = nrow(College_log)
+n.train = floor(.46*n)
+train = sample(1:n, size=n.train, replace=FALSE)
+
+
+## setting training 
+College_log_train = College_log[train,]
+scale_college_train = as.data.frame(scale(College_log_train[-1]))
+scale_college_train$Apps = College_log_train$Apps
+scale_college_train$Private = College_log_train$Private
+
+## setting testing
+College_log_test = College_log[-train,]
+scale_college_test = as.data.frame(scale(College_log_test[-1]))
+scale_college_test$Apps = College_log_test$Apps
+scale_college_test$Private = College_log_test$Private
+
+```    
+    b. Using the recommended transformations from previous works for the normal regression model with some complex model (no variable selection), obtain the RMSE for predicting the number of applications (not the transformed response) for the test data under OLS.
+
+```{r}
+library(ISLR)
+
+rmse = function(y, ypred){
+  rmse = sqrt(mean((y-ypred)^2))
+  return(rmse)
+}
+
+lm_fit3 = lm(log(Apps) ~ .
+             , data = scale_college_train)
+
+rmse_linear = rmse(scale_college_test$Apps, exp(predict(lm_fit3, scale_college_test[,-1])))
+rmse_linear
+```
+Under OLS, the rmse is `r rmse_linear`.    
+    c. Using the same variables as above,  obtain the RMSE for the test data using ridge regression with $\lambda$ chosen by cross-validation (the cross-validation for choosing $\lambda$ should only use the training data).
+```{r ridge, message= FALSE}
+library(glmnet)
+scale_college = as.data.frame(scale(College[-1]))
+scale_college$Apps = College$Apps
+scale_college$Private = College$Private
+
+xmat = model.matrix(log(Apps) ~ .
+                    , data = scale_college_train)[, -1]
+
+y = College_log_train$Apps
+grid = 10^seq(10,-2,length = 100)
+
+cv.out = cv.glmnet(xmat,y,alpha = 0)
+bestlam = cv.out$lambda.min
+
+out=glmnet(xmat,y,alpha=0,lambda=grid)
+ridge.coef=predict(out,type="coefficients",s=bestlam)
+ridge.coef
+
+ridge.mod = glmnet(xmat,y,alpha = 0, lambda = bestlam)
+xmat_test = model.matrix(log(Apps) ~ .
+                         , data = scale_college_test)[, -1]
+
+test = (-train)
+y.test = y[test]
+ridge.pred = predict(ridge.mod, newx =  xmat_test)
+
+rmse_ridge = rmse(scale_college_test$Apps, ridge.pred)
+```
+The RMSE for test data using lasso with best $\lambda$ = `r bestlam` is `r rmse_ridge`. All variables are important, since ridge does not perform variable selection. 
+    d. Using the same variables as above, obtain the RMSE for the test data using lasso with $\lambda$ chosen by cross-validation.  Report on which variables are selected by lasso.
+```{r lar}
+grid = 10^seq(10,-2,length = 100)
+lasso.mod = glmnet(xmat,y,alpha = 1, lambda = grid)
+
+cv.out = cv.glmnet(xmat,y,alpha = 1)
+bestlam = cv.out$lambda.min
+
+out=glmnet(xmat,y,alpha=1,lambda=grid)
+lasso.coef=predict(out,type="coefficients",s=bestlam)
+lasso.coef
+
+xmat_test = model.matrix(log(Apps) ~ ., data = scale_college_test)[, -1]
+lasso.pred = predict(lasso.mod, s = bestlam, newx =  xmat_test)
+
+rmse_lasso = rmse(scale_college_test$Apps, lasso.pred)
+
+```
+The RMSE for test data using lasso with best $\lambda$ = `bestlam` is `rmse_lasso`. The important variables are all variables except for `PhD`. 
+    e. (optional)  Using the same variables, obtain the RMSE for the test data using one of the mixtures of $g$ priors under BMA  Report on  which variables are viewed as important under the BMA model.
+```{r}
+
+library(BAS)
+df.bas =  bas.lm(log(Apps) ~ ., 
+                 data=scale_college_train, 
+                 prior="ZS-null", 
+                 a=nrow(scale_college_train), 
+                 modelprior=uniform(), method="deterministic")
+
+# predicting Y test
+pred.df.bas = predict(df.bas, scale_college_test, estimator="BMA")
+pred.df.bas2 = predict(df.bas, scale_college_test, estimator="BPM")
+
+rmse_gbma = rmse(exp(pred.df.bas$fit),scale_college_test$Apps)
+rmse_gbpm = rmse(exp(pred.df.bas2$fit),scale_college_test$Apps)
+
+
+```
+RMSE for test data using mixtures of $g$ priors under BMA is `r rmse_gbma`. 
+RMSE for test data using mixtures of $g$ priors under BPM is `r rmse_gbpm`. 
+Under BMA model using $g$ prior, `Accept`, `Enroll`,`F.Undergrad`, `P.Undergrad`, `Outstate`, `Room.Board`, `PhD` and `Expend` are viewed as important, since these variables have the probability over 50%.
+    f.  Using the same variables, obtain the RMSE for the test data using the horseshoe prior, using  `bhs` in `library(monomvn)`,  with`RJ=FALSE`.    Report on  which variables are viewed as important under the  horseshoe with variable selection.
+
+Firstly, let us obtain the RMSE for the test data using blasso with and without`RJ=TRUE` with same variables,   
+```{r}
+library(monomvn)
+fit_blasso = blasso(xmat, y, T = 2000, thin = NULL, RJ = TRUE, M = NULL,
+                    beta = NULL, lambda2 = 1)
+
+
+beta_blasso = c(mu = mean(fit_blasso$mu),apply(fit_blasso$beta,2,mean))
+xtest_blasso = cbind(1,xmat_test)
+ypred_blasso = as.matrix(xtest_blasso) %*% matrix(beta_blasso,ncol = 1)
+rmse_blasso_T = rmse(ypred_blasso,scale_college_test$Apps)
+summary(fit_blasso)$bn0
+
+fit_blasso_F = blasso(xmat, y, T = 2000, thin = NULL, RJ = FALSE, M = NULL, beta = NULL, lambda2 = 1)
+
+summary(fit_blasso_F)
+beta_blasso_F = c(mu = mean(fit_blasso_F$mu),apply(fit_blasso_F$beta,2,mean))
+xtest_blasso_F = cbind(1,xmat_test)
+ypred_blasso_F = as.matrix(xtest_blasso_F) %*% matrix(beta_blasso_F,ncol = 1)
+rmse_blasso_F = rmse(ypred_blasso_F,scale_college_test$Apps)
+apply(fit_blasso_F$beta !=0, 2, mean)
+```
+We find that RMSE for test data using blasso with `RJ=TRUE` is `r rmse_blasso_T`, and with `RJ=FALSE` is `r rmse_blasso_F`
+Under RJ = True, the important variables are `Private`, `Top10perc`, `P.Undergrad`, `Outstate`, `Grad.Rate` and `Expend`.
+Under RJ = False, all variables are defined as important since they have the probabilty to selected all equal to 1. 
+
+Then we obtain the RMSE for the test data using the horseshoe prior,  `bhs` in `library(monomvn)`.
+
+```{r}
+fit_bhs = bhs(xmat, y, T = 1000, thin = NULL, RJ = TRUE, M = NULL,
+              beta = NULL, lambda2 = 1)
+
+beta_bhs = c(mu = mean(fit_bhs$mu),apply(fit_bhs$beta,2,mean))
+xtest_bhs = cbind(1,xmat_test)
+ypred_bhs = as.matrix(xtest_bhs) %*% matrix(beta_bhs,ncol = 1)
+rmse_bhs_T = rmse(ypred_bhs,scale_college_test$Apps)
+summary(fit_bhs)$bn0
+
+
+fit_bhs_F = bhs(xmat, y, T = 1000, thin = NULL, RJ = FALSE, M = NULL,
+                beta = NULL, lambda2 = 1)
+
+beta_bhs_F = c(mu = mean(fit_bhs_F$mu),apply(fit_bhs_F$beta,2,mean))
+xtest_bhs_F = cbind(1,xmat_test)
+ypred_bhs_F = as.matrix(xtest_bhs_F) %*% matrix(beta_bhs_F,ncol = 1 )
+rmse_bhs_F = rmse(ypred_bhs_F,scale_college_test$Apps)
+
+apply(fit_bhs_F$beta !=0, 2, mean)
+```
+
+Here, RMSE for test data using horseshoe prior with `RJ=TRUE` is `r rmse_bhs_T`, and with `RJ=FALSE` is `r rmse_bhs_F`. 
+Under RJ = True, the important variables are `Private`, `Accept`, `Top10perc` `P.Undergrad`, `Outstate`, `Grad.Rate` , `Terminal` `perc.alumini` and `Expend`.
+Under RJ = False, all variables are defined as important since they have the probabilty to selected all equal to 1. 
+
+
+    g.  For the above methods that can produce prediction intervals, determine what percent of the test observations are included inside 95% prediction intervals and report a table of coverage values and comment on results.   For example, if `lm.ridge` does not provide prediction intervals, can use the blasso function to obtain prediction intervals?
+    
+```{r}
+library(arm)
+pi = function(object, newdata, level = 0.95, nsim =1000){
+  n = nrow(newdata)
+  X = model.matrix(object, data = newdata)
+  y.rep = matrix(NA, nsim, n)
+  
+  sim_object = sim(object, nsim)
+  beta = sim_object@coef
+  for(i in 1:nsim){
+    mu = (X %*% beta[i,])
+    y.rep[i, ] <- rnorm(n, mu, sim_object@sigma[i])
+  }
+  
+  pi = t(apply(y.rep, 2, function(x) {
+    quantile(x, c((1-level)/2, .5+ level/2))}))
+  return(pi)
+  
+}
+
+# linear
+lm_CI = exp(pi(lm_fit3, scale_college_test))
+coverage_lm =mean(scale_college_test$Apps >= lm_CI[,1] & scale_college_test$Apps <= lm_CI[,2])
+
+# BMA & BPM
+pred.df_predict = predict(df.bas, scale_college_test, se.fit = TRUE, estimator="BMA",prediction = TRUE)
+pred.df_predict_BPM = predict(df.bas, scale_college_test, se.fit = TRUE ,estimator="BPM", prediction = TRUE)
+
+confint_BMA = exp(confint(pred.df_predict,parm = 'pred'))
+coverage_BMA = mean(scale_college_test$Apps >= confint_BMA[,1] & scale_college_test$Apps <= confint_BMA[,2])
+
+confint_BPM = exp(confint(pred.df_predict_BPM,parm = 'pred'))
+coverage_BPM = mean(scale_college_test$Apps >= confint_BPM[,1] & scale_college_test$Apps <= confint_BPM[,2])
+
+Blasso_cov = fit_blasso$mu + t(xmat_test %*% t(fit_blasso$beta))
+coverage_blasso = mean(scale_college_test$Apps >= apply(Blasso_cov,2, function(x) quantile(x,0.025)) & scale_college_test$Apps <= apply(Blasso_cov,2, function(x) quantile(x,0.975)))
+
+Blasso_covf = fit_blasso_F$mu + t(xmat_test %*% t(fit_blasso_F$beta))
+coverage_blasso_F = mean(scale_college_test$Apps >= apply(Blasso_covf,2, function(x) quantile(x,0.025)) & scale_college_test$Apps <= apply(Blasso_covf,2, function(x) quantile(x,0.975)))
+
+Blasso_BHS = fit_bhs$mu + t(xmat_test %*% t(fit_bhs$beta))
+coverage_BHS = mean(scale_college_test$Apps >= apply(Blasso_BHS,2, function(x) quantile(x,0.025)) & scale_college_test$Apps <= apply(Blasso_BHS,2, function(x) quantile(x,0.975)))
+
+Blasso_BHSf = fit_bhs_F$mu + t(xmat_test %*% t(fit_bhs_F$beta))
+coverage_BHSf = mean(scale_college_test$Apps >= apply(Blasso_BHSf,2, function(x) quantile(x,0.025)) & scale_college_test$Apps <= apply(Blasso_BHSf,2, function(x) quantile(x,0.975)))
+
+Table = data.frame(Model = c('Linear','BPM','BMA','BLASSO_RJ','BLASSO','BHS_RJ','BHS'), 
+                   Coverage = c(coverage_lm, coverage_BPM, coverage_BMA, coverage_blasso,  coverage_blasso_F, coverage_BHS, coverage_BHSf ))
+
+Table2 = data.frame(Model = c('Linear','Ridge','LASSO','BPM','BMA','BLASSO_RJ','BLASSO','BHS_RJ','BHS'), Rmse = c(rmse_linear,rmse_ridge,rmse_lasso,rmse_gbma,rmse_gbpm,rmse_blasso_T,rmse_blasso_F,rmse_bhs_T,rmse_bhs_F))
+
+kable(Table)
+kable(Table2)
+```
+    h.  (plan ahead for this and ask questions Friday)   Use Student $t$ errors 8 degrees of freedom and a prior that has heavier tails than the error distribution  modify the JAGS  code below to fit a model to the training data. Report the RMSE and coverage on the test data.
+
+```{r}
+
+fit_blasso_st = blasso(xmat, y, T = 500, thin = NULL, RJ = TRUE, M = NULL,
+                       beta = NULL, lambda2 = 1, theta = 1)
+beta_blasso_st = c(mu = mean(fit_blasso_st$mu),apply(fit_blasso_st$beta,2,mean))
+xtest_blasso_st = cbind(1,xmat_test)
+ypred_blasso_st = as.matrix(xtest_blasso_st) %*% matrix(beta_blasso_st,ncol = 1)
+rmse_blasso_st_T = rmse(ypred_blasso_st,scale_college_test$Apps)
+
+Blasso_st = fit_blasso_st$mu + t(xmat_test %*% t(fit_blasso_st$beta))
+coverage_Blasso_st_T = mean(scale_college_test$Apps >= apply(Blasso_st,2, function(x) quantile(x,0.025)) & scale_college_test$Apps <= apply(Blasso_st,2, function(x) quantile(x,0.975)))
+
+rmse_blasso_st_T
+coverage_Blasso_st_T
+```
+
+
+```{r }
+fit_blasso_st_F = blasso(xmat, y, T = 500, thin = NULL, RJ = FALSE, M = NULL,
+                         beta = NULL, lambda2 = 1, theta = 1)
+
+beta_blasso_st_F = c(mu = mean(fit_blasso_st_F$mu),apply(fit_blasso_st_F$beta,2,mean))
+xtest_blasso_st_F = cbind(1,xmat_test)
+ypred_blasso_st_F = as.matrix(xtest_blasso_st_F) %*% matrix(beta_blasso_st_F,ncol = 1)
+rmse_blasso_st_F = rmse(ypred_blasso_st_F,scale_college_test$Apps)
+
+Blasso_st_F = fit_blasso_st_F$mu + t(xmat_test %*% t(fit_blasso_st_F$beta))
+coverage_Blasso_st_F = mean(scale_college_test$Apps >= apply(Blasso_st_F,2, function(x) quantile(x,0.025)) & scale_college_test$Apps <= apply(Blasso_st_F,2, function(x) quantile(x,0.975)))
+
+rmse_blasso_st_F
+coverage_Blasso_st_F 
+```
+
+
+the rate parameter (> 0) to the exponential prior on the degrees of freedom paramter nu under a model with Student-t errors implemented by a scale-mixture prior. The default setting of theta = 0 turns off this prior, defaulting to a normal errors prior
+
+Using Student $t$ errors with RJ = TRUE, the rmse is `r rmse_blasso_st_T`, and coverage is  `r coverage_Blasso_st_T`.
+Using Student $t$ errors with RJ = FALSE, the rmse is `r rmse_blasso_st_F`, and coverage is `r coverage_Blasso_st_F `
+
+    
+4. For the college data, the negative binomial model seemed to provide the best model.   Using the representation of the Negative Binomial as a gamma mixture of Poissons (HW4),   modify the JAGS code so that the response has a Poisson distribution with mean `lambda[i]` and that `lambda[i]` has a gamma distriubtion as in problem 20 of HW4.   Using scaled predictors, implement one of the scale mixtures of normal priors (lasso  horseshoe, or other) in JAGS. Using JAGS to obtain predictions, report the RMSE and coverage of credible intervals for the test data.  
+
+```{r}
+library('rjags')
+library('runjags')
+set.seed(10)
+n = nrow(College)
+n.train = floor(.46*n)
+train = sample(1:n, size=n.train, replace=FALSE)
+
+College.train = College[train,]
+
+College.train = College[train,]
+college_train = College.train
+college_train$college = NULL
+college_train[,5:16] = log(college_train[,5:16])
+if (length(which(college_train$perc.alumni==-Inf)) > 0) {
+  college_train = college_train[-which(College_train$perc.alumni==-Inf),] 
+}
+
+College.test = College[-train,]
+college_test = College.test
+college_test$college = NULL
+college_test[,5:16] = log(college_test[,5:16] + 1)
+if (length(which(college_test$perc.alumni==-Inf)) > 0) {
+  college_test = college_test[-which(College_test$perc.alumni==-Inf),] 
+}
+
+
+
+Xmat = model.matrix(Apps ~ ., data=college_train)
+
+Xmat = Xmat[,-1]  # drop intercept
+# Create a data list with inputs for WinBugs
+scaled_Xmat = scale(Xmat)
+data = list(Y = college_train$Apps,  
+            X = cbind(scaled_Xmat), p=ncol(Xmat))
+data$n = length(data$Y)
+data$scales = attr(scaled_Xmat, "scaled:scale")
+data$Xbar = attr(scaled_Xmat, "scaled:center")
+
+
+
+horseshoe.mod = "model {
+
+for (i in 1:n) {
+log(mu[i]) = inprod(X[i,], beta.s)  + alpha0
+lambda[i] ~ dgamma(theta, theta/mu[i])
+Y[i] ~ dpois(lambda[i])
+}
+
+for (j in 1:p){
+beta.s[j] ~ dnorm(0, 1/(tau[j]/phi))
+tau_2[j] ~ dt(0, 1/c_phi_2, 1)T(0, )
+tau[j] <- pow(tau_2[j], 2)
+}
+
+theta ~ dgamma(10,10)
+c_phi_2 ~ dt(0, 1, 1)T(0, )
+phi ~ dgamma(1.0E-6, 1.0E-6)  # approximate p(phi) = 1/phi
+alpha0  ~ dnorm(0, 1.0E-10)  # approximate p(alpha_0) = 1
+
+for (j in 1:p){
+beta[j] <- beta.s[j] / scales[j]
+}
+
+beta0 <- alpha0 - inprod(beta, Xbar)
+}
+"
+
+parameters = c("beta0", "beta")
+hs_sim = jags(data, inits=NULL,
+              parameters.to.save=parameters,
+              model.file=textConnection(horseshoe.mod),
+              n.iter=1000)
+
+xmat_test = model.matrix(Apps ~ ., data=college_test)
+beta = c(hs_sim$BUGSoutput$mean$beta0, hs_sim$BUGSoutput$mean$beta)
+jags_pred = exp(xmat_test %*% beta)
+
+
+rmse_jags = rmse(college_test$Apps,jags_pred)
+
+
+sim_mat = hs_sim$BUGSoutput$sims.matrix
+sim_mat = sim_mat[,-ncol(sim_mat)]
+
+pred_sim = exp(cbind(xmat_test[,-1],xmat_test[,1]) %*% t(sim_mat))
+
+
+theta_sim = rgamma(1500, 10,1)
+y_sim = matrix(nrow=nrow(college_test),ncol=nrow(sim_mat))
+for (i in 1:nrow(college_test)){
+  for (j in 1:nrow(sim_mat)){
+    y_sim[i,j] = rpois(1,rgamma(1, theta_sim[j], theta_sim[j]/pred_sim[i,j]))
+  }
+}
+
+interval = apply(y_sim, 1, function(x) quantile(x,c(.025,.975)))
+
+coverage_jags = mean(college_test$Apps >= interval[1,] & college_test$Apps <= interval[2,])
+
+
+
+upper = hs_sim$BUGSoutput$summary[,7][-19]
+lower = hs_sim$BUGSoutput$summary[,3][-19]
+CI = as.data.frame(cbind(upper,lower))
+rownames(CI)[-18] = paste(colnames(Xmat))
+```
+
+```{r}
+kable(CI)
+```
+
+The rmse for this model is "r rmse_jags", and coverage is "r coverage_jags". The confidence interval is also presented above. 
+
+5.  Provide a summary paragraph comment on the results obtained in 3 and 4.  How accurately can we predict the number of applications?  Is there much difference in RMSEs among these methods? Is there much difference in coverage among these methods? 
+
+From question (3), we can see that all of the models have rmse in the range of 1300 to 1900, where linear model has the largest rmse and ridge has the smallest. For the models that have coverage, linear, BPM and BMA perform the best coverage over 95%. For Bayesian Lasso and BHS, they have the coverage around 0.38. However, when we ass Student $t$ errors to the model, the rmse will reduced to around 1000 and coverage will be stay around 0.45. Overall, there is not much difference in rmse among these methods while there is much difference in coverage among these methods.    
+
+From question(4), in the negative bionomial as a gamma mixture of Poisson model, the rmse is "r rmse_jag" and coverage is around 95%.
+
+Considering with small rmse and large converage, we would recommend negative bionomial as a gamma mixture of Poisson model as the final model since they have relatively small rmse and large converage. 
+
+6. For the recommended model, provide CI for all of the parameters, and pick 5 (or more) of the most important variables and provide a paragraph that provides an interpretation of the parameters (and intervals) that can be provided to a university admissions officer about which variables increase admissions. 
+
+In the CI table from question(4), `F.Undergrad`,  `P.Undergrad`, `Room.Board`, `Phd` and `Outstate` are five most significant variables in the model. For F.Undergrad: If the the number of fulltime undergraduates increases 1%, and the other variables are held constant, the number of application in this University will increase about 0.95%. However, the confidence interval suggests that there’s also chance that the increase proportion is of 95% possibility between 0.84% and 1.05%. For P.Undergrad: If the number of parttime undergraduates increases 1%, and the other variables are held constant, the number of application in this University will decrease about 0.082%. And the decrease proportion is of 95% possibility between 0.04% and 0.12%. For Room.Board: If the costs of room and boards increases 1%, and the other variables are the same, the number of application in this University will increase about 0.31%. And the increase proportion is of 95% possibility between 0.026% and 0.559%. For Phd: If the Pct. of faculty with Phd increases 1%, and the other variables are the same, the number of application in this University will increase about 0.094%. However, the confidence interval suggests that there’s also chance that it will decrease up to 0.08% or increase up to 0.376%. For Outstates: If the out-of-state tuition increases 1%, and the other variables are the same, the number of application in this University will increase about 0.157%. However, the confidence interval suggests that there’s also chance that it will decrease up to 0.016% or increase up to 0.352%. However these relative risks may not hold true in real cases, because this is observational data and we cannot conclude any causual relationship from it.
+    
+    
+
+   
+
